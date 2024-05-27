@@ -14,7 +14,9 @@ Handles the creation of a database connection.
 """
 def create_database_connection(connection):
     try:
-        if connection.platform.platform_id == 1:
+        platform_name = connection.platform.platform_name.lower()
+        
+        if platform_name == "postgresql":
             conn = psycopg2.connect(
                 dbname=connection.database_name,
                 user=connection.username,
@@ -23,8 +25,9 @@ def create_database_connection(connection):
                 port=connection.port
             )
 
-            return conn,connection.platform.platform_id
-        elif connection.platform.platform_id == 2:
+            return conn,connection
+        
+        elif platform_name == "mysql":
 
             connect_mysql = pymysql.connect(
                 host=connection.hostname,
@@ -34,22 +37,25 @@ def create_database_connection(connection):
                 database=connection.database_name
             )
 
-            return connect_mysql,connection.platform.platform_id
-        elif connection.platform.platform_id == 3:
+            return connect_mysql,connection
+        
+        elif platform_name == "mongodb":
             client = MongoClient(os.getenv("DB_URL_MONGO"))
             db_mongo = client[connection.database_name]
-            return db_mongo,connection.platform.platform_id
+            return db_mongo,connection
        
     except Exception as e:
         print(f"Error connecting to database {connection.database_name}: {e}")
 
-        return None,connection.platform.platform_id
+        return None,connection
 
-def fetch_table_names(db,platform_id):
+def fetch_table_names(db,data_con):
+        platform_name = data_con.platform.platform_name.lower()
+
         if db is None:
             return []
         
-        if platform_id == 1 or platform_id == 2:
+        if platform_name == "postgresql" or platform_name == "mysql":
             cursor = db.cursor()
             query = """
                 SELECT table_name 
@@ -57,13 +63,13 @@ def fetch_table_names(db,platform_id):
                 WHERE table_schema = %s 
                 AND table_type = 'BASE TABLE'
             """
-            schema = 'public' if platform_id == 1 else os.getenv("DB_NAME_MYSQL")
+            schema = 'public' if platform_name == "postgresql" else data_con.database_name
             cursor.execute(query, [schema])
             table_names = cursor.fetchall()
             cursor.close()
             return table_names
         
-        elif platform_id == 3:
+        elif platform_name == "mongodb":
             # return db.list_collection_names()
             collection_names = db.list_collection_names()
             sorted_collection_names = sorted(collection_names)
@@ -71,21 +77,28 @@ def fetch_table_names(db,platform_id):
 """
 Saves fetched table names into the DataTables model.
 """
-def store_table_names(table_names, connection):
+def store_table_names(table_names, connection,platform_name):
     with transaction.atomic():
         for table_name in table_names:
-            DataTables.objects.update_or_create(
-                table_name=table_name[0],  # table_name is a tuple
-                connection=connection,
-                defaults={'table_name': table_name[0]}
-            )
+            if platform_name == "postgresql" or platform_name == "mysql":
+                DataTables.objects.update_or_create(
+                    table_name=table_name[0],  # table_name is a tuple
+                    connection=connection,
+                    defaults={'table_name': table_name[0]}
+                )
+            elif platform_name == "mongodb":
+                DataTables.objects.update_or_create(
+                    table_name=table_name, 
+                    connection=connection,
+                    defaults={'table_name': table_name}
+                )
 """
 Update data tables from all database connections.
 """
 def update_data_tables():
     connections = DatabaseConnections.objects.all()
     for connection in connections:
-        conn = create_database_connection(connection)
+        conn,connn = create_database_connection(connection)
         table_names = fetch_table_names(conn)
         if table_names:
             store_table_names(table_names, connection)
@@ -98,11 +111,11 @@ ALTER SEQUENCE data_tables_table_id_seq RESTART WITH 1;
 """
 Fetch all attributes for a given table.
 """
-def fetch_table_attributes(conn, table_name, platform_id):
+def fetch_table_attributes(conn, table_name, platform_name):
     attributes = []
 
     try:
-        if platform_id == 1:  # PostgreSQL
+        if platform_name == "postgresql":  # PostgreSQL
             query = """
                 SELECT
                     c.column_name,
@@ -128,7 +141,7 @@ def fetch_table_attributes(conn, table_name, platform_id):
                 cursor.execute(query, (table_name,))
                 attributes = cursor.fetchall()
 
-        elif platform_id == 2:  # MySQL
+        elif platform_name == "mysql":  # MySQL
             query = """
                 SELECT
                     c.COLUMN_NAME AS column_name,
@@ -150,27 +163,22 @@ def fetch_table_attributes(conn, table_name, platform_id):
                 cursor.execute(query, (table_name, table_name, table_name))
                 attributes = [dict((cursor.description[i][0], value) for i, value in enumerate(row)) for row in cursor.fetchall()]
 
-        elif platform_id == 3:  # MongoDB
-            # สำหรับการดึงข้อมูลของ MongoDB ให้ใช้ข้อมูลจาก `conn` ซึ่งเป็น database
-            # ดึงข้อมูลจาก `table_name` ซึ่งเป็นชื่อของ collection ใน MongoDB
-            collection = conn[table_name]  # เชื่อมต่อกับ collection
-            # ดึงข้อมูลของแต่ละฟิลด์ใน collection ด้วย `.find_one()`
-            # ปรับปรุงโค้ดด้านล่างนี้ตามต้องการเพื่อให้ข้อมูลของ attributes เหมาะสมกับการใช้งาน
+        elif platform_name == "mongodb":  
+            collection = conn[table_name]  
             sample_document = collection.find_one()
             
-            # ดึง keys จาก `sample_document` เป็นชื่อของ attributes
-            # คุณสามารถปรับโค้ดนี้ตามรูปแบบของข้อมูลที่คุณต้องการ
+            
             if sample_document:
                 for key, value in sample_document.items():
-                    # คุณสามารถตรวจสอบประเภทของ `value` ได้จาก type() หรืออื่นๆ ตามต้องการ
+                    
                     data_type = type(value).__name__
                     
-                    # สร้าง dictionary สำหรับ attribute และ append ไปยัง `attributes`
+                    
                     attributes.append({
                         'column_name': key,
                         'data_type': data_type,
-                        'is_primary_key': False,  # MongoDB ไม่มี primary key โดยตรง แต่มี _id
-                        'is_foreign_key': False   # ไม่มี foreign key โดยตรงใน MongoDB
+                        'is_primary_key': False,
+                        'is_foreign_key': False
                     })
 
     except Exception as e:
@@ -222,7 +230,7 @@ def store_table_attributes(table_name, attributes, connection):
 def update_data_tables_and_attributes():
     connections = DatabaseConnections.objects.all()
     for connection in connections:
-        conn = create_database_connection(connection)
+        conn,connn = create_database_connection(connection)
         try:
             if conn:
                 table_names = fetch_table_names(conn)

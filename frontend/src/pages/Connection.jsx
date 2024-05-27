@@ -37,7 +37,6 @@ function Connection() {
       .get("/connection/platforms/")
       .then((response) => {
         setPlatforms(response.data);
-        console.log(response.data)
         if (response.data.length > 0) {
           setSelectedPlatform(response.data[0].platform_id);
         }

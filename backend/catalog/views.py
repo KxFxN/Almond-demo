@@ -13,16 +13,18 @@ def get_tables_for_connection(request, connection_id):
         connection = DatabaseConnections.objects.get(connection_id=connection_id)
 
         # Create database connection
-        db_conn,platform_id = create_database_connection(connection)
+        db_conn,data_con = create_database_connection(connection)
+        platform_name = data_con.platform.platform_name.lower()
+
         if db_conn is None:
             return JsonResponse({'error': 'Failed to connect to database'}, status=500)
 
         # Fetch tables
-        tables = fetch_table_names(db_conn,platform_id)
+        tables = fetch_table_names(db_conn,data_con)
         if tables:
             # Store table names in the DataTables model
-            store_table_names(tables, connection)
-            if platform_id == 3 :
+            store_table_names(tables, connection,platform_name)
+            if platform_name == "mongodb" :
                 table_list = [{'table_name': name} for name in tables]
             else:
                 table_list = [{'table_name': name[0]} for name in tables]
@@ -41,11 +43,13 @@ def get_attributes_for_table(request, connection_id, table_name):
     
     try:
         connection = DatabaseConnections.objects.get(connection_id=connection_id)
-        db_conn,platform_id = create_database_connection(connection)
+        db_conn,data_con = create_database_connection(connection)
+        platform_name = data_con.platform.platform_name
+        platform_name = platform_name.lower()
         if db_conn is None:
             return JsonResponse({'error': 'Failed to connect to database'}, status=500)
 
-        attributes = fetch_table_attributes(db_conn, table_name,platform_id)
+        attributes = fetch_table_attributes(db_conn, table_name,platform_name)
         
         if attributes:
             # store_table_attributes(table_name, attributes, connection)
